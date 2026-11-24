@@ -193,3 +193,23 @@ Added: `domain/accountDeletion.ts`, `services/firestoreEraser.ts`, `services/acc
 
 ## Updated launch status
 Blockers B1 (Delete Account), B3 (Feedback), B4 (backup wording) and B5 (reminders) are **resolved**; B2 (support address) is **prepared and waiting for a real address**. Remaining launch decisions: the support address, the hosting-provider line in the privacy policy, and the checks in `VERCEL_DEPLOYMENT_PLAN.md`.
+
+## Guest import: enablement review (2026-11-24)
+Status: **reviewed, NOT enabled.** Nothing was changed, deployed, committed or pushed. `EXPO_PUBLIC_GUEST_IMPORT_ENABLED` is still `false` in `.env.example` and off in production builds. The change to `true` is waiting for approval (see the gate below).
+
+What the code does (read in `services/guestMigration.ts`, `services/guestMigrationStore.ts`, `domain/guestImport.ts`):
+- **Imported:** habits, schedule history, completions and day notes. The user chooses which habits.
+- **Not imported:** the wallet (coins, transactions, rewards, milestones, freezes). This is the approved product decision. There is no wallet migration protocol on the web, so "wallet transactions migrate" does not apply.
+- **Duplicates:** cloud ids are `{guestId}-m{migrationId[0..8]}` and are checked against the server, so a guest habit never overwrites an existing one; an identical habit already in the account is imported as a separate habit.
+- **Rewards:** every imported habit carries `rewardsIgnoredThrough` (the import date). Web reward rules ignore those days (`domain/rewards.ts`, `domain/schedule.ts`), so imported history earns and reverses nothing.
+- **Retry:** the migration record fixes the id, the chosen habits, the id map and the cutoff date; a retry only adds missing completions and notes.
+- **Guest data:** never modified or deleted. The completed marker is written only after the data is read back from the server and compared.
+- **Tests:** `npm test` passes (34 files, 856 tests). The live Firebase tests have never been run.
+
+Why it is not enabled yet (from `GUEST_MIGRATION_PLAN.md`, "Rollout gate"):
+1. The Android release that reads `rewardsIgnoredThrough` must be the build in use first. Older Android builds ignore the field and can still pay or reverse rewards for imported history, which can reduce an account's coins. This repository has no Android code, so Android compatibility could not be checked here.
+2. The Android change has been tested only by unit tests, not on a device or against real Firestore data.
+3. The live Firebase tests (batches, server reads, profile transaction) have not been run.
+4. `scripts/verify-production-build.mjs` and `tests/vercelConfig.test.ts` currently require the flag to be `false`; they must be changed together with the flag.
+
+Known limitations: guest streaks are recomputed without freezes; check-in times become local noon; one import per guest data set; a second browser has no import record.
