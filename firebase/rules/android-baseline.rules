@@ -1,0 +1,129 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      function isOwner() { return request.auth != null && request.auth.uid == userId; }
+      function userPath() { return /databases/$(database)/documents/users/$(userId); }
+      function txPath(id) { return /databases/$(database)/documents/users/$(userId)/walletTransactions/$(id); }
+
+      // Wallet fields (coins, freezesOwned) may only change together with a new ledger entry written in the
+      // same transaction whose deltas and balance match the change. This blocks casual edits, but a determined
+      // owner can still write a fake "reward" entry: see the production notes in the project summary.
+      function walletUnchanged() {
+        return request.resource.data.get('coins', 0) == resource.data.get('coins', 0)
+          && request.resource.data.get('freezesOwned', 0) == resource.data.get('freezesOwned', 0)
+          && request.resource.data.get('pendingAdjustment', 0) == resource.data.get('pendingAdjustment', 0);
+      }
+      function deleting() { return get(userPath()).data.get('deletionRequested', false) == true; }
+      function walletChangeBackedByLedger() {
+        let id = request.resource.data.lastTransactionId;
+        let tx = getAfter(txPath(id)).data;
+        return resource.data.get('deletionRequested', false) != true
+          && id != resource.data.get('lastTransactionId', '')
+          && !exists(txPath(id))
+          && tx.coinDelta == request.resource.data.coins - resource.data.get('coins', 0)
+          && tx.freezeDelta == request.resource.data.freezesOwned - resource.data.get('freezesOwned', 0)
+          && tx.balanceAfter == request.resource.data.coins
+          && tx.get('pendingDelta', 0) == request.resource.data.get('pendingAdjustment', 0) - resource.data.get('pendingAdjustment', 0)
+          && request.resource.data.coins >= 0
+          && request.resource.data.freezesOwned >= 0
+          && request.resource.data.get('pendingAdjustment', 0) >= 0;
+      }
+
+      allow read: if isOwner();
+      allow create: if isOwner() && request.resource.data.get('coins', 0) == 20 && request.resource.data.get('freezesOwned', 0) == 0;
+      // Once account deletion has started, the flag can't be cleared (so ledger records can't be deleted and restored).
+      allow update: if isOwner() && (walletUnchanged() || walletChangeBackedByLedger())
+        && !(resource.data.get('deletionRequested', false) == true && request.resource.data.get('deletionRequested', false) != true);
+      allow delete: if isOwner() && resource.data.get('deletionRequested', false) == true;
+
+      match /habits/{habitId}/{rest=**} {
+        allow read, write: if isOwner();
+      }
+      match /habits/{habitId} {
+        allow read, write: if isOwner();
+      }
+      match /todos/{todoId} {
+        allow read, write: if isOwner();
+      }
+
+      // Optional day notes: one per habit and date (id "{habitId}_{date}"), plain text up to 200 characters.
+      // Reflection only; they have no wallet or streak fields and no rule above reads them.
+      match /dayNotes/{noteId} {
+        allow read, delete: if isOwner();
+        allow create, update: if isOwner()
+          && noteId == request.resource.data.habitId + '_' + request.resource.data.date
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 200;
+      }
+
+      // Ledger entries are append-only and must be the entry the wallet update in the same transaction points to.
+      match /walletTransactions/{txId} {
+        allow read: if isOwner();
+        allow create: if isOwner()
+          && getAfter(userPath()).data.lastTransactionId == txId
+          // Rewards (+1 daily, up to +20 for a streak milestone), reward reversals and partial grants (part paid toward
+          // a pending adjustment), freeze purchases (-20; earlier ones were -10) and the welcome freeze (0 coins, +1 freeze).
+          && request.resource.data.coinDelta is int
+          && request.resource.data.coinDelta >= -20 && request.resource.data.coinDelta <= 20
+          && request.resource.data.get('pendingDelta', 0) is int
+          && request.resource.data.get('pendingDelta', 0) >= -20 && request.resource.data.get('pendingDelta', 0) <= 20
+          && request.resource.data.freezeDelta in [0, 1, -1];
+        allow update: if false;
+        allow delete: if isOwner() && deleting();
+      }
+
+      // Reward state (in effect or reversed, and its cycle), written only together with the ledger entry it records.
+      match /rewards/{rewardId} {
+        allow read: if isOwner();
+        allow create, update: if isOwner()
+          && request.resource.data.lastTransactionId == getAfter(userPath()).data.lastTransactionId
+          && existsAfter(txPath(request.resource.data.lastTransactionId))
+          && request.resource.data.active is bool;
+        allow delete: if isOwner() && deleting();
+      }
+
+      // One freeze per habit per day, created only alongside its ledger entry.
+      match /freezes/{freezeId} {
+        allow read: if isOwner();
+        allow create: if isOwner()
+          && freezeId == request.resource.data.habitId + '_' + request.resource.data.date
+          && existsAfter(txPath('freeze_apply_' + freezeId));
+        allow update: if false;
+        allow delete: if isOwner() && deleting();
+      }
+
+      // Monthly application counter: can only go up by one, never past 3.
+      match /freezeMonths/{month} {
+        allow read: if isOwner();
+        allow create, update: if isOwner()
+          && request.resource.data.count == (resource == null ? 0 : resource.data.count) + 1
+          && request.resource.data.count <= 3;
+        allow delete: if isOwner() && deleting();
+      }
+    }
+
+    // Feedback & Suggestions: create-only for any authenticated writer (accounts, and guests through an anonymous
+    // identity on a separate Firebase app). Nobody can list, change or delete feedback from the app; a writer may
+    // only fetch their own document (the app checks it before retrying, so a retry can't create a duplicate).
+    match /feedback/{feedbackId} {
+      allow get: if request.auth != null && (resource == null || resource.data.userId == request.auth.uid);
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['category', 'description', 'userId', 'isGuest', 'createdAt', 'appVersion', 'status'])
+        && request.resource.data.keys().hasAll(['category', 'description', 'userId', 'isGuest', 'createdAt', 'appVersion', 'status'])
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.category in ['bug', 'improvement', 'feature']
+        && request.resource.data.description is string
+        && request.resource.data.description.size() <= 2000
+        && request.resource.data.description.trim().size() > 0
+        && request.resource.data.isGuest is bool
+        && request.resource.data.isGuest == (request.auth.token.firebase.sign_in_provider == 'anonymous')
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.appVersion is string
+        && request.resource.data.appVersion.size() <= 32
+        && request.resource.data.status == 'new';
+      allow list, update, delete: if false;
+    }
+  }
+}

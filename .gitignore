@@ -1,0 +1,82 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders
+/ios
+/android
+
+# ── Phase 11B: secrets, scratch and tool output ──
+# Environment files hold build settings (the Firebase web config is public, but keep every env file out of Git). Only the example is tracked.
+.env
+.env.*
+!.env.example
+# JVM crash dumps and replay files record environment variables and paths
+hs_err_pid*.log
+replay_pid*.log
+# scratch folders and tool logs
+_tmp/
+*.log
+# Firebase CLI local state and emulator logs
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# copy of the production rules used only during a rollback
+firebase/rollback/firestore.rules
+
+# Vercel CLI local project link (it names the project and org); the deployment itself is configured in vercel.json and the Vercel dashboard
+.vercel/
+
+# Credentials and service accounts: never commit these. The web app uses none (its Firebase values are public identifiers set in the environment).
+serviceAccount*.json
+service-account*.json
+*-firebase-adminsdk-*.json
+credentials*.json
+google-services.json
+GoogleService-Info.plist
+
+# Local Firebase emulator data and exports, test and coverage output, data-audit reports (they may hold real data)
+emulator-data/
+firebase-export-*/
+test-results/
+coverage/
+audit-report*.json
+
+# Claude Code configuration for this working copy: development tooling, kept on the local machine only
+.claude/
