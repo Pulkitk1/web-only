@@ -6,8 +6,8 @@ import { describe, expect, it } from 'vitest';
 
 import { dayProgress, daysCompletion, percent } from '@/domain/analytics';
 import { progressIconGeometry, progressOf } from '@/domain/progressIcon';
-import { weekRangeLabel, weekTitle, windowDays, WINDOW_DAYS } from '@/domain/week';
-import { CARD_END, CARD_START, gridMetrics, LIST_PADDING, MENU_WIDTH, NAME_MIN, RING_GAP } from '@/components/dashboard/layout';
+import { DESKTOP_WINDOW_DAYS, weekRangeLabel, weekTitle, windowDays, WINDOW_DAYS } from '@/domain/week';
+import { breakpointFor, CARD_END, CARD_START, gridMetrics, MAX_COLUMN_DESKTOP, LIST_PADDING, MENU_WIDTH, NAME_MIN, RING_GAP } from '@/components/dashboard/layout';
 import { readableOn } from '@/utils/color';
 import { formatMonthDay } from '@/utils/date';
 import { sched } from './helpers';
@@ -69,6 +69,35 @@ describe('week strip', () => {
     expect(weekTitle(0)).toBe('This Week');
     expect(weekTitle(-1)).toBe('Previous 5 Days');
     expect(weekTitle(-3)).toBe('Earlier');
+  });
+  it('the desktop window is the last seven real days, newest first, and its first five are the phone window', () => {
+    const today = '2026-11-14';
+    const seven = windowDays(today, 0, DESKTOP_WINDOW_DAYS);
+    expect(seven).toEqual(['2026-11-14', '2026-11-13', '2026-11-12', '2026-11-11', '2026-11-10', '2026-11-09', '2026-11-08']);
+    expect(seven.slice(0, WINDOW_DAYS)).toEqual(windowDays(today));
+    expect(new Set(seven).size).toBe(7);
+  });
+  it('desktop windows tile without gaps or overlap and cross month boundaries', () => {
+    const all = [0, -1, -2].flatMap((o) => windowDays('2026-11-14', o, 7));
+    expect(new Set(all).size).toBe(21);
+    expect(weekRangeLabel(windowDays('2027-01-02', 0, 7))).toBe('Dec 27 – Jan 2');
+    expect(weekRangeLabel(windowDays('2027-01-02', -1, 7))).toBe('Dec 20 – Dec 26');
+  });
+  it('the previous-window title follows the window size', () => {
+    expect(weekTitle(-1, 7)).toBe('Previous 7 Days');
+    expect(weekTitle(0, 7)).toBe('This Week');
+  });
+  it('breakpoints: phone below 768, tablet 768-1023, desktop from 1024', () => {
+    expect([320, 375, 390, 767].map(breakpointFor)).toEqual(['mobile', 'mobile', 'mobile', 'mobile']);
+    expect([768, 1023].map(breakpointFor)).toEqual(['tablet', 'tablet']);
+    expect([1024, 1280, 1440, 1920].map(breakpointFor)).toEqual(['desktop', 'desktop', 'desktop', 'desktop']);
+  });
+  it('seven desktop columns fit in the narrowest desktop list and never exceed the column cap', () => {
+    const narrow = gridMetrics(548, 7, MAX_COLUMN_DESKTOP); // 1024px window: list column is ~548px
+    const fixed = CARD_START + narrow.ring + RING_GAP + NAME_MIN + MENU_WIDTH + CARD_END;
+    expect(fixed + narrow.column * 7).toBeLessThanOrEqual(548 - LIST_PADDING * 2); // all seven columns fit beside a readable name, no scrolling
+    expect(gridMetrics(5000, 7, MAX_COLUMN_DESKTOP).column).toBe(MAX_COLUMN_DESKTOP);
+    expect(gridMetrics(390).column).toBe(gridMetrics(390, WINDOW_DAYS).column); // phone metrics are untouched by the new parameters
   });
   it('formats "MMM d"', () => expect(formatMonthDay('2026-03-05')).toBe('Mar 5'));
 });

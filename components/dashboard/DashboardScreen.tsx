@@ -1,28 +1,30 @@
 /**
  * Home dashboard (android/.../ui/screens/HabitsScreen.kt `HabitsScreen`). Local mock data only.
- * Layout is phone-first like Android; on wide browsers the content is a centred column (max 560) on the full-width background.
+ * Layout is phone-first like Android; below 768 px the content is a centred column (max 560) on the full-width background.
+ * Tablet (768-1023): same five-day list in a wider column. Desktop (>= 1024): seven days, with Today's Progress in a side panel.
  */
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import { useEffect, useState, type ReactNode } from 'react';
+import { StyleSheet, Text, View, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
 
 import { MilestoneCelebrationScreen } from '@/components/celebrations/MilestoneCelebrationScreen';
 import { homeHabits } from '@/domain/archive';
 import { RestDayCelebration } from '@/components/celebrations/RestDayCelebration';
 import { StreakCelebration } from '@/components/celebrations/StreakCelebration';
+import { Icon } from '@/components/ui/Icon';
 import { Toast, useToast } from '@/components/ui/overlays';
 import { MAX_FREEZE_APPLICATIONS_PER_MONTH } from '@/domain/freeze';
-import { windowDays } from '@/domain/week';
+import { DESKTOP_WINDOW_DAYS, windowDays } from '@/domain/week';
 import { useTheme } from '@/hooks/useTheme';
 import { useAppStore, type HabitView } from '@/store/AppStore';
-import { homePalette } from '@/theme';
+import { Brand, homePalette } from '@/theme';
 import { formatWeekdayMonthDay, type DateKey } from '@/utils/date';
 import { ArchiveHabitSheet } from './ArchiveHabitSheet';
 import { CreateHabitSheet } from './CreateHabitSheet';
 import { DayHeader } from './DayHeader';
 import { HabitCard } from './HabitCard';
 import { HabitList } from './HabitList';
-import { gridMetrics } from './layout';
+import { breakpointFor, DESKTOP_MAX_WIDTH, gridMetrics, MAX_COLUMN_DESKTOP, SIDE_PANEL_WIDTH, TABLET_MAX_WIDTH } from './layout';
 import { CoinEarnPopup, GuestBonusPopup, GUEST_BONUS, MissedDayFreezeModal } from './popups';
 import { ProgressCard } from './ProgressCard';
 import { TopBar } from './TopBar';
@@ -40,10 +42,14 @@ export function DashboardScreen() {
   // The day Today's Progress reports on (tap a day label); back to today when the date changes.
   const [selected, setSelected] = useState<DateKey>(today);
   useEffect(() => setSelected(today), [today]);
-  const days = windowDays(today, weekOffset);
+  const { width: windowWidth } = useWindowDimensions();
+  const bp = breakpointFor(windowWidth);
+  const desktop = bp === 'desktop';
+  const days = windowDays(today, weekOffset, desktop ? DESKTOP_WINDOW_DAYS : undefined);
 
+  // Width of the column holding the habit list (the whole content column on phones/tablets, the left column on desktop).
   const [width, setWidth] = useState(390);
-  const metrics = gridMetrics(width);
+  const metrics = desktop ? gridMetrics(width, DESKTOP_WINDOW_DAYS, MAX_COLUMN_DESKTOP) : gridMetrics(width);
 
   const [celebrating, setCelebrating] = useState<{ name: string; streak: number } | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -90,43 +96,75 @@ export function DashboardScreen() {
     setShowMissedDay(true);
   };
 
+  const topBar = (
+    <TopBar title="Habits" coins={store.coins} p={p} brand={desktop} onWallet={goWallet} onSettings={() => router.push('/settings')} onAdd={() => setShowCreate(true)} />
+  );
+  const list = (footer: ReactNode) => (
+    <HabitList
+      habits={home}
+      onReorder={store.reorderHabits}
+      renderCard={(habit) => (
+        <HabitCard
+          habit={habit}
+          days={days}
+          today={today}
+          metrics={metrics}
+          p={p}
+          celebratedDate={restDayCelebration?.habitId === habit.id ? restDayCelebration.date : null}
+          onOpen={() => router.push(`/habits/${habit.slug}`)}
+          onToggle={(date) => store.toggleHabitDate(habit.id, date)}
+          onStreak={() => setCelebrating({ name: habit.name, streak: habit.streak })}
+          onDelete={() => store.deleteHabit(habit.id)}
+          onArchive={() => setArchiving(habit)}
+        />
+      )}
+      footer={footer}
+    />
+  );
+  const progressCard = (
+    <ProgressCard
+      day={selected}
+      today={today}
+      done={progress.completed}
+      total={progress.eligible}
+      p={p}
+      onGuestBonus={() => setShowGuestBonus(true)}
+      onMissedDay={onMissedDay}
+    />
+  );
+  const onColumnLayout = (e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width);
+
   return (
     <View style={{ flex: 1, backgroundColor: p.bg }}>
-      <View style={{ flex: 1, width: '100%', maxWidth: 560, alignSelf: 'center' }} onLayout={(e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width)}>
-        <TopBar title="Habits" coins={store.coins} p={p} onWallet={goWallet} onSettings={() => router.push('/settings')} onAdd={() => setShowCreate(true)} />
-        <WeekSelector offset={weekOffset} days={days} p={p} onOffset={(o) => setWeekOffset(Math.min(0, o))} />
-        <DayHeader days={days} today={today} selected={selected} metrics={metrics} onSelect={setSelected} />
-        <HabitList
-          habits={home}
-          onReorder={store.reorderHabits}
-          renderCard={(habit) => (
-            <HabitCard
-              habit={habit}
-              days={days}
-              today={today}
-              metrics={metrics}
-              p={p}
-              celebratedDate={restDayCelebration?.habitId === habit.id ? restDayCelebration.date : null}
-              onOpen={() => router.push(`/habits/${habit.slug}`)}
-              onToggle={(date) => store.toggleHabitDate(habit.id, date)}
-              onStreak={() => setCelebrating({ name: habit.name, streak: habit.streak })}
-              onDelete={() => store.deleteHabit(habit.id)}
-              onArchive={() => setArchiving(habit)}
-            />
-          )}
-          footer={
-            <ProgressCard
-              day={selected}
-              today={today}
-              done={progress.completed}
-              total={progress.eligible}
-              p={p}
-              onGuestBonus={() => setShowGuestBonus(true)}
-              onMissedDay={onMissedDay}
-            />
-          }
-        />
-      </View>
+      {desktop ? (
+        <View style={{ flex: 1, width: '100%', maxWidth: DESKTOP_MAX_WIDTH, alignSelf: 'center', paddingHorizontal: 24 }}>
+          {topBar}
+          <View style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: 12, paddingTop: 18, paddingBottom: 2 }}>
+            <Icon name="bar-chart" size={26} color={Brand.Purple} />
+            <Text accessibilityRole="header" numberOfLines={1} style={{ marginLeft: 6, color: t.text, fontSize: 26, fontWeight: '700', letterSpacing: -0.5 }}>
+              Habits
+            </Text>
+          </View>
+          <View style={{ flex: 1, flexDirection: 'row', gap: 24 }}>
+            <View style={{ flex: 1, minWidth: 0 }} onLayout={onColumnLayout}>
+              <WeekSelector offset={weekOffset} days={days} p={p} part="title" onOffset={(o) => setWeekOffset(Math.min(0, o))} />
+              <DayHeader days={days} today={today} selected={selected} metrics={metrics} onSelect={setSelected} />
+              {list(null)}
+            </View>
+            <View style={{ width: SIDE_PANEL_WIDTH, flexShrink: 0, paddingRight: 8 }}>
+              <WeekSelector offset={weekOffset} days={days} p={p} part="range" onOffset={(o) => setWeekOffset(Math.min(0, o))} />
+              <View style={{ marginTop: 14 }}>{progressCard}</View>
+            </View>
+          </View>
+        </View>
+      ) : (
+        <View style={{ flex: 1, width: '100%', maxWidth: bp === 'tablet' ? TABLET_MAX_WIDTH : 560, alignSelf: 'center' }} onLayout={onColumnLayout}>
+          {topBar}
+          <WeekSelector offset={weekOffset} days={days} p={p} onOffset={(o) => setWeekOffset(Math.min(0, o))} />
+          <DayHeader days={days} today={today} selected={selected} metrics={metrics} onSelect={setSelected} />
+          {list(progressCard)}
+        </View>
+      )}
 
       {/* ── Overlays (drawn over the whole screen) ── */}
       <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>

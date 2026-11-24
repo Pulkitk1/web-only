@@ -1,5 +1,6 @@
 import { Pressable, Text, View } from 'react-native';
 
+import { Logo } from '@/components/Logo';
 import { CoinIcon } from '@/components/ui/CoinIcon';
 import { Icon } from '@/components/ui/Icon';
 import { SquareIconButton } from '@/components/ui/SquareIconButton';
@@ -13,17 +14,30 @@ type Props = {
   onWallet: () => void;
   onSettings: () => void;
   onAdd: () => void;
+  /** Desktop: the Consisto logo and name replace the page title on the left (the "Habits" title moves below the bar). */
+  brand?: boolean;
 };
 
 /** Home top bar (HabitsScreen.kt `TopBar`): chart icon, title, coin pill, theme toggle, settings, add. */
-export function TopBar({ title, coins, p, onWallet, onSettings, onAdd }: Props) {
+export function TopBar({ title, coins, p, onWallet, onSettings, onAdd, brand = false }: Props) {
   const { t, isDark, toggle } = useTheme();
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: 18, paddingRight: 16, paddingTop: 12, paddingBottom: 6 }}>
-      <Icon name="bar-chart" size={26} color={Brand.Purple} />
-      <Text numberOfLines={1} style={{ flex: 1, marginLeft: 6, color: t.text, fontSize: 26, fontWeight: '700', letterSpacing: -0.5 }}>
-        {title}
-      </Text>
+    <View style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: brand ? 12 : 18, paddingRight: brand ? 12 : 16, paddingTop: 12, paddingBottom: 6 }}>
+      {brand ? (
+        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <Logo size={36} />
+          <Text numberOfLines={1} accessibilityRole="header" style={{ color: t.text, fontSize: 20, fontWeight: '700', letterSpacing: -0.3 }}>
+            Consisto
+          </Text>
+        </View>
+      ) : (
+        <>
+          <Icon name="bar-chart" size={26} color={Brand.Purple} />
+          <Text numberOfLines={1} style={{ flex: 1, marginLeft: 6, color: t.text, fontSize: 26, fontWeight: '700', letterSpacing: -0.5 }}>
+            {title}
+          </Text>
+        </>
+      )}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <Pressable
           accessibilityRole="button"

@@ -528,7 +528,19 @@ try {
     const m = await ev(`(() => { const first=document.querySelector('[aria-label^="Open "]').getBoundingClientRect(); return { sw: document.documentElement.scrollWidth, iw: window.innerWidth, left: first.left, right: first.right, width: first.width }; })()`);
     check(`${w}px: no horizontal overflow`, m.sw <= m.iw, `scrollWidth ${m.sw} > ${m.iw}`);
     check(`${w}px: cards fit inside the viewport`, m.left >= 0 && m.right <= m.iw + 0.5, JSON.stringify(m));
-    if (w >= 768) check(`${w}px: content is a centred column no wider than 560px`, m.width <= 560 && Math.abs(m.left - (m.iw - m.right)) < 2, JSON.stringify(m));
+    if (w < 768) check(`${w}px: phone layout is unchanged (a column no wider than 560px)`, m.width <= 560 && Math.abs(m.left - (m.iw - m.right)) < 2, JSON.stringify(m));
+    else if (w < 1024) check(`${w}px: tablet is a centred column no wider than 720px`, m.width <= 720 && Math.abs(m.left - (m.iw - m.right)) < 2, JSON.stringify(m));
+    else check(`${w}px: desktop content stays within 1280px and the cards leave room for the side panel`, m.right <= (m.iw + 1280) / 2 && m.width < m.iw - 380, JSON.stringify(m));
+    const dayCols = await ev(`(() => { const c=document.querySelector('[aria-label^="Open "]'); return { dots: c.querySelectorAll('[role=checkbox]').length, header: [...document.querySelectorAll('[aria-label^="Show progress for "]')].map(e => e.getAttribute('aria-label')) }; })()`);
+    const want = w >= 1024 ? 7 : 5;
+    check(`${w}px: ${want} day columns per habit and in the header`, dayCols.dots === want && dayCols.header.length === want, JSON.stringify(dayCols));
+    if (w === 1280) {
+      // Seven distinct, consecutive, newest-first dates: Today (Sat 21) back to Sun 15.
+      const want7 = ['Sat 21', 'Fri 20', 'Thu 19', 'Wed 18', 'Tue 17', 'Mon 16', 'Sun 15'];
+      check('1280px: the seven header dates are real consecutive days, newest first', JSON.stringify(dayCols.header.map((l) => l.replace('Show progress for ', ''))) === JSON.stringify(want7), JSON.stringify(dayCols.header));
+      const side = await ev(`(() => { const t=[...document.querySelectorAll('*')].find(e => e.children.length===0 && e.textContent==="Today's Progress"); const c=document.querySelector('[aria-label^="Open "]').getBoundingClientRect(); const r=t.getBoundingClientRect(); return { progressLeft: r.left, cardRight: c.right }; })()`);
+      check("1280px: Today's Progress sits in a side panel to the right of the habit list", side.progressLeft > side.cardRight, JSON.stringify(side));
+    }
     await shot(`responsive-${w}`);
   }
   check('no console errors while loading', logs.length === 0, logs.join(' | '));
