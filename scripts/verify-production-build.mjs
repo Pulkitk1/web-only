@@ -30,7 +30,7 @@ const count = (s) => bundle.split(s).length - 1;
 console.log(`Checking ${relative(process.cwd(), dir) || '.'} (${files.length} files, ${js.length} JavaScript files, ${(bundle.length / 1048576).toFixed(1)} MB of script)`);
 
 console.log('\nNothing development-only is shipped');
-for (const needle of ['__consistoFake', 'consistoDev', 'consisto_mock_start_coins', 'EXPO_PUBLIC_APPCHECK_DEBUG_TOKEN', 'LIVE_TEST_', 'e2e_auth', 'e2e_fs']) {
+for (const needle of ['__consistoFake', 'consistoDev', 'consisto_mock_start_coins', 'consisto_seed_demo', 'EXPO_PUBLIC_APPCHECK_DEBUG_TOKEN', 'LIVE_TEST_', 'e2e_auth', 'e2e_fs']) {
   check(`no "${needle}" in the bundle`, count(needle) === 0, `${count(needle)} occurrence(s)`);
 }
 // The Firebase SDK itself mentions FIREBASE_APPCHECK_DEBUG_TOKEN, so check the VALUE instead: a debug token set in the environment must not be inlined.

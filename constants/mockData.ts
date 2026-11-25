@@ -1,6 +1,5 @@
 /**
- * LOCAL MOCK DATA for the web prototype only. Nothing here comes from a database; it exists so the dashboard has
- * something to show. All dates are generated relative to today so the demo always looks "live".
+ * SAMPLE DATA for development and the browser tests only. It is NOT used to start a real guest or account (a new user starts empty). All dates are generated relative to today so the demo always looks "live".
  */
 import type { Habit } from '@/types/habit';
 import { addDays, dayName, isAfter, type DateKey } from '@/utils/date';
@@ -97,5 +96,19 @@ export function mockStartCoins(): number {
     return Number.isInteger(n) && n >= 0 ? n : MOCK_START_COINS;
   } catch {
     return MOCK_START_COINS;
+  }
+}
+
+/**
+ * DEVELOPMENT ONLY: `localStorage['consisto_seed_demo'] === '1'` makes a brand-new session start with the sample habits instead of empty
+ * (the browser tests are written against them). `__DEV__` is false in a production build, so this always returns false there and the
+ * sample data is not reachable (verify:build checks the key is absent). Nothing in the app sets it.
+ */
+export function demoSeedEnabled(): boolean {
+  if (typeof __DEV__ === 'undefined' || !__DEV__) return false;
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem('consisto_seed_demo') === '1';
+  } catch {
+    return false;
   }
 }

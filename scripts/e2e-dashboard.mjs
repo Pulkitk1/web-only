@@ -71,7 +71,7 @@ ws.onmessage = (m) => {
 // ── Mock Firebase Auth server ──
 // The auth tests run the real Firebase SDK in the page, but every identitytoolkit / securetoken request is answered here, so
 // no account is ever created in the real project. Firestore is not used by this phase: any request to it is refused and recorded.
-const authMock = { accounts: new Map([['a@b.co', { password: 'secret1', uid: 'uid-existing' }], ['r@b.co', { password: 'secret1', uid: 'uid-rewards' }], ['p@b.co', { password: 'secret1', uid: 'uid-pending' }], ['w@b.co', { password: 'secret1', uid: 'uid-wallet' }], ['v@b.co', { password: 'secret1', uid: 'uid-wallet-b' }], ['x@b.co', { password: 'secret1', uid: 'uid-welcome' }], ['del@b.co', { password: 'secret1', uid: 'uid-delete' }], ['del2@b.co', { password: 'secret1', uid: 'uid-delete-b' }]]), log: [], firestore: [], failNext: false, failDelete: false, uidCounter: 0 };
+const authMock = { accounts: new Map([['a@b.co', { password: 'secret1', uid: 'uid-existing' }], ['r@b.co', { password: 'secret1', uid: 'uid-rewards' }], ['p@b.co', { password: 'secret1', uid: 'uid-pending' }], ['w@b.co', { password: 'secret1', uid: 'uid-wallet' }], ['v@b.co', { password: 'secret1', uid: 'uid-wallet-b' }], ['x@b.co', { password: 'secret1', uid: 'uid-welcome' }], ['del@b.co', { password: 'secret1', uid: 'uid-delete' }], ['del2@b.co', { password: 'secret1', uid: 'uid-delete-b' }], ['z@b.co', { password: 'secret1', uid: 'uid-zero' }]]), log: [], firestore: [], failNext: false, failDelete: false, uidCounter: 0 };
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
 const fakeToken = (uid, email) => {
   const now = Math.floor(Date.now() / 1000);
@@ -135,6 +135,9 @@ Object.assign(FIXTURE, {
   'users/uid-wallet-b/habits/h-wb1': { name: 'Second Account Habit', color: composeLong(0xa78bfa), daysPerWeek: 7, restDays: [], createdDate: '2026-11-21', sortOrder: 0, createdAt: { ms: 5 } },
   // An account Android created whose free welcome freeze could not be written then (the marker is still set).
   'users/uid-welcome': { email: 'x@b.co', coins: 20, freezesOwned: 0, pendingAdjustment: 0, welcomeFreezePending: true, createdAt: { ms: 1 } },
+  // An account with no habits at all (a brand-new sign-up that has not created one yet).
+  'users/uid-zero': { email: 'z@b.co', coins: 20, freezesOwned: 1, pendingAdjustment: 0, welcomeFreezePending: false, lastTransactionId: 'welcome_freeze', createdAt: { ms: 1 } },
+  'users/uid-zero/walletTransactions/welcome_freeze': { type: 'welcome_freeze', coinDelta: 0, freezeDelta: 1, balanceAfter: 20, createdAt: { ms: 10 } },
   'users/uid-welcome/habits/h-x1': { name: 'Welcome Habit', color: composeLong(0xfbbf24), daysPerWeek: 7, restDays: [], createdDate: '2026-11-21', sortOrder: 0, createdAt: { ms: 5 } },
 });
 const nov = (d) => `2026-11-${String(d).padStart(2, '0')}`;
@@ -494,11 +497,14 @@ await send('Page.addScriptToEvaluateOnNewDocument', { source: fakeReaderSource }
 // The earlier checks sign in with a guest's data on the device. Since Phase 10 that offers the guest import over the app, so unless a test
 // sets sessionStorage `e2e_import`, every test account has already answered "Start with my existing account" (the recorded choice that keeps the prompt away).
 await send('Page.addScriptToEvaluateOnNewDocument', {
-  source: `try { if (!sessionStorage.getItem('e2e_import') && localStorage.getItem('consisto_guest_migration') === null) localStorage.setItem('consisto_guest_migration', JSON.stringify({ version: 1, records: {}, completed: null, declined: ['uid-existing','uid-rewards','uid-pending','uid-wallet','uid-wallet-b','uid-welcome','uid-delete','uid-delete-b','uid-delete-c', ...Array.from({ length: 60 }, (_, i) => 'uid-new-' + (i + 1))] })); } catch (e) {}`,
+  source: `try { if (!sessionStorage.getItem('e2e_import') && localStorage.getItem('consisto_guest_migration') === null) localStorage.setItem('consisto_guest_migration', JSON.stringify({ version: 1, records: {}, completed: null, declined: ['uid-existing','uid-rewards','uid-pending','uid-wallet','uid-wallet-b','uid-welcome','uid-zero','uid-delete','uid-delete-b','uid-delete-c', ...Array.from({ length: 60 }, (_, i) => 'uid-new-' + (i + 1))] })); } catch (e) {}`,
 });
 await send('Page.addScriptToEvaluateOnNewDocument', {
   source: `try { if (!sessionStorage.getItem('e2e_auth') && localStorage.getItem('guest_mode') === null) localStorage.setItem('guest_mode', 'true'); } catch (e) {}`,
 });
+// The sample habits the older checks are written against are a development-only seed; a real first-time guest starts empty (the 'First-time guest' section removes this script while it runs and adds it back after).
+const SEED_SCRIPT_SOURCE = `try { localStorage.setItem('consisto_seed_demo', '1'); } catch (e) {}`;
+let seedScriptId = (await send('Page.addScriptToEvaluateOnNewDocument', { source: SEED_SCRIPT_SOURCE })).result.identifier;
 await send('Page.addScriptToEvaluateOnNewDocument', {
   source: `(() => { const Real = Date; const off = ${FAKE_NOW} - Real.now();
     class FakeDate extends Real { constructor(...a) { if (a.length === 0) super(Real.now() + off); else super(...a); } static now() { return Real.now() + off; } }
@@ -544,6 +550,103 @@ try {
     await shot(`responsive-${w}`);
   }
   check('no console errors while loading', logs.length === 0, logs.join(' | '));
+
+  // ───────────────────────────── First-time guest: no sample data ─────────────────────────────
+  section('First-time guest starts empty (no sample habits, history or rewards)');
+  const ft_SAMPLE = ['SQL Practice', 'Morning Run', 'Read Books', 'Meditate', 'Drink Water'];
+  const ft_appData = () => ev(`JSON.parse(localStorage.getItem('consisto_app_data') || 'null')`);
+  const ft_typeInto = async (selector, value) => {
+    await ev(`(() => { const i=document.querySelector(${JSON.stringify(selector)}); i.focus(); i.select(); })()`);
+    await send('Input.insertText', { text: value });
+    await sleep(200);
+  };
+  // Wipe this site's saved data from a blank page, so no running copy of the app can write its old data back afterwards.
+  const ft_wipeStorage = async () => {
+    await send('Page.navigate', { url: 'about:blank' });
+    await sleep(400);
+    await send('Storage.clearDataForOrigin', { origin: new URL(BASE).origin, storageTypes: 'local_storage' });
+  };
+  await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: seedScriptId }); // the development-only sample seed is off for this section
+  const ft_freshGuest = async () => {
+    await ft_wipeStorage();
+    await send('Page.navigate', { url: `${BASE}/habits` });
+    await waitFor(() => has("Today's Progress"), 20000);
+    await sleep(600);
+  };
+  await viewport(390, 844, true);
+  await ft_freshGuest();
+  const ft_t0 = await text();
+  const gridHidden = async () => (await ev(`document.querySelectorAll('[role=checkbox]').length`)) === 0 && (await ev(`document.querySelectorAll('[aria-label^="Show progress for "]').length`)) === 0;
+  check('shows the empty screen: heading, description and the first-habit button', ft_t0.includes('Create your first habit') && ft_t0.includes('Small steps lead to big changes. Start building a better routine, one habit at a time.') && ft_t0.includes('Create Your First Habit') && ft_t0.includes('You can start small and build consistency at your own pace.'));
+  check('no habit cards and none of the five sample habits', (await names()).length === 0 && ft_SAMPLE.every((n) => !ft_t0.includes(n)));
+  check("the dashboard body is hidden: no This Week, date range, day grid, Today's Progress, Guest Bonus or Missed Day", (await gridHidden()) && !/This Week|Today's Progress|Guest Bonus|Missed Day|Nov \d+ – Nov \d+/.test(ft_t0) && !/NaN|Infinity|undefined/.test(ft_t0), ft_t0.slice(0, 200));
+  check('the header stays: coin balance, theme toggle, settings and add-habit button', (await coins()) === 20 && (await ev(`!!document.querySelector('[aria-label="Settings"]') && !!document.querySelector('[aria-label="New habit"]') && !!(document.querySelector('[aria-label="Switch to light mode"]') || document.querySelector('[aria-label="Switch to dark mode"]'))`)));
+  const ft_saved0 = await ft_appData();
+  check('the saved guest data has no habits, no notes, no earned rewards and no frozen days', ft_saved0 && ft_saved0.data.habits.length === 0 && Object.keys(ft_saved0.data.notes).length === 0 && Object.keys(ft_saved0.data.ledger.rewards).length === 0 && ft_saved0.data.ledger.freezes.length === 0, JSON.stringify(ft_saved0 && ft_saved0.data.ledger.wallet));
+  check('the wallet is the standard new-user wallet: 20 coins, one welcome freeze', ft_saved0.data.ledger.wallet.coins === 20 && ft_saved0.data.ledger.wallet.freezesOwned === 1, JSON.stringify(ft_saved0.data.ledger.wallet));
+  const ft_mobile = await ev(`({ sw: document.documentElement.scrollWidth, iw: innerWidth, h: [...document.querySelectorAll('[role=button]')].find(e => (e.getAttribute('aria-label')||'') === 'Create your first habit').getBoundingClientRect().height })`);
+  check('on a phone the empty screen does not scroll sideways and the button is easy to tap (>= 48px tall)', ft_mobile.sw <= ft_mobile.iw && ft_mobile.h >= 48, JSON.stringify(ft_mobile));
+  await shot('guest-empty-dark-390');
+  await viewport(1280, 800);
+  await sleep(500);
+  const ft_m0 = await ev(`({ sw: document.documentElement.scrollWidth, iw: innerWidth })`);
+  const ft_btn = await ev(`(() => { const r=[...document.querySelectorAll('[role=button]')].find(e => (e.getAttribute('aria-label')||'') === 'Create your first habit').getBoundingClientRect(); return { cx: r.x + r.width / 2, iw: innerWidth }; })()`);
+  check('on a desktop the empty screen has no horizontal scrolling, is centred, and keeps the logo header', ft_m0.sw <= ft_m0.iw && Math.abs(ft_btn.cx - ft_btn.iw / 2) < 4 && (await has('Consisto')) && !(await has("Today's Progress")), JSON.stringify({ ft_m0, ft_btn }));
+  await shot('guest-empty-dark-1280');
+  if ((await theme()) === 'dark') await click('[role=button]', 'Switch to light mode');
+  await shot('guest-empty-light-1280');
+  await viewport(390, 844, true);
+  await sleep(400);
+  await shot('guest-empty-light-390');
+  if ((await theme()) === 'light') await click('[role=button]', 'Switch to dark mode');
+
+  // The first habit, deliberately named like a sample habit: it is the user's own and must survive everything below.
+  await click('[role=button]', 'Create your first habit');
+  check('"Create Your First Habit" opens the same creation flow as the Add Habit button', await waitFor(async () => (await ev(`document.querySelectorAll('[role=radio]').length`)) > 0, 3000));
+  await click('[role=radio]', '', 2); // 7 days a week
+  await click('[role=button]', 'Next → Create Habit');
+  await ft_typeInto('input[aria-label="Habit name"]', 'SQL Practice');
+  await click('[role=button]', 'Create "SQL Practice"');
+  check('the first habit replaces the empty screen straight away (no refresh) with the normal dashboard', (await waitFor(async () => (await names()).length === 1, 3000)) && !(await has('Create your first habit')) && (await has("Today's Progress")) && (await has('This Week')));
+  await click('[role=checkbox]', '', 0); // today
+  await sleep(600);
+  const ft_coinsAfter = await coins();
+  const ft_done1 = await ev(`document.querySelectorAll('[aria-label^="Open SQL Practice"] [role=checkbox]')[0].getAttribute('aria-label')`);
+  check("completing today works and Today's Progress shows 1/1", ft_done1.includes('done') && (await has('1/1')), ft_done1);
+  await send('Page.navigate', { url: `${BASE}/habits` });
+  await waitFor(async () => (await names()).length === 1, 15000);
+  await sleep(500);
+  const ft_done2 = await ev(`document.querySelectorAll('[aria-label^="Open SQL Practice"] [role=checkbox]')[0].getAttribute('aria-label')`);
+  check('after a refresh the habit, its completion and the coins are all still there (not reset, not re-seeded)', (await names()).join() === 'SQL Practice' && ft_done2.includes('done') && (await coins()) === ft_coinsAfter, `${ft_done2} ${ft_coinsAfter}`);
+  // "Close and reopen the browser": the guest flag and data are saved in this browser's storage, so the first load of a new page sees the same.
+  await send('Page.navigate', { url: 'about:blank' });
+  await sleep(300);
+  await send('Page.navigate', { url: `${BASE}/habits` });
+  await waitFor(async () => (await names()).length === 1, 15000);
+  check('after leaving and reopening the site the guest still has the habit', (await names()).join() === 'SQL Practice');
+  // Clicking "Continue as Guest" again must not reset anything.
+  await ev(`localStorage.removeItem('guest_mode')`);
+  await send('Page.navigate', { url: `${BASE}/habits` });
+  await waitFor(() => has('Continue as Guest'), 15000);
+  await click('[role=button]', '=Continue as Guest');
+  await waitFor(async () => (await names()).length === 1, 15000);
+  check('"Continue as Guest" again restores the same habit and coins instead of starting over', (await names()).join() === 'SQL Practice' && (await coins()) === ft_coinsAfter && !(await has('Create your first habit')));
+  // Deleting the last habit brings the empty screen back; a returning guest with zero habits stays on it after a refresh.
+  await click('[aria-label="More options"]');
+  await click('[role=menuitem]', 'Delete Habit');
+  check('deleting the last habit returns to the empty screen straight away', (await waitFor(() => has('Create your first habit'), 3000)) && !(await has("Today's Progress")) && (await names()).length === 0);
+  await send('Page.navigate', { url: `${BASE}/habits` });
+  await waitFor(() => has('Create your first habit'), 15000);
+  const ft_savedZero = await ft_appData();
+  check('a returning guest with zero habits still sees the empty screen after a refresh, with no sample data', (await names()).length === 0 && ft_savedZero.data.habits.length === 0 && ft_SAMPLE.every((n) => !JSON.stringify(ft_savedZero).includes(n)));
+  // A different browser profile (a new visitor, or a private window) has its own empty storage.
+  await ft_wipeStorage();
+  await send('Page.navigate', { url: `${BASE}/habits` });
+  await waitFor(() => has('Create your first habit'), 15000);
+  check('a brand-new browser profile (like a private window) starts empty again', (await names()).length === 0);
+  seedScriptId = (await send('Page.addScriptToEvaluateOnNewDocument', { source: SEED_SCRIPT_SOURCE })).result.identifier; // the checks below use the sample data again
+
+  if (process.env.FIRST_GUEST_ONLY) throw new Error('stopped after the first-time guest section (FIRST_GUEST_ONLY)');
 
   // ───────────────────────────── Theme persistence ─────────────────────────────
   section('Theme persistence');
@@ -2568,6 +2671,18 @@ check('it uses the chosen colour (Rose #FB7185)', restBg === 'rgb(251, 113, 133)
   await reloadApp();
   await sleep(2500);
   check('a reload grants nothing more (the marker is gone and the id exists)', (await wlog()).length === writesWelcome && (await walletNow('uid-welcome')).freezesOwned === 1);
+
+  section('Signed-in account with no habits sees the empty screen');
+  await signOutUi();
+  await signInAs('z@b.co', 'secret1');
+  await sleep(1500);
+  const zt = await text();
+  check('shows the empty screen and the header, with no sample habits and no dashboard body', zt.includes('Create your first habit') && zt.includes('Create Your First Habit') && (await names()).length === 0 && !/This Week|Today's Progress|Guest Bonus|Missed Day|SQL Practice|Morning Run|Read Books|Meditate|Drink Water/.test(zt) && (await coins()) === 20, zt.slice(0, 160));
+  const zWatched = await fake('watched()');
+  check('it reads only its own data, never another account or the guest', zWatched.length > 0 && zWatched.every((p) => p === 'users/uid-zero' || p.startsWith('users/uid-zero/')), JSON.stringify(zWatched));
+  await click('[role=button]', 'Create your first habit');
+  check('its button opens the creation flow', await waitFor(async () => (await ev(`document.querySelectorAll('[role=radio]').length`)) > 0, 3000));
+  await click('[aria-label="Close"]');
 
   section('Phase 9D.5: accounts never see each other\'s wallet');
   await signOutUi();

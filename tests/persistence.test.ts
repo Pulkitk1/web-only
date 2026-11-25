@@ -13,19 +13,66 @@ import { scheduleOf, streakOf } from '@/domain/schedule';
 import { MILESTONE_BONUSES } from '@/domain/rewards';
 import { BACKUP_KEY, createAppStorage, MIGRATIONS, STORAGE_KEY, STORAGE_VERSION, validateData, type PersistedData } from '@/services/appStorage';
 import { createDevicePrefs, MemoryStorage, type KeyValueStorage } from '@/services/devicePrefs';
-import { buildFreshState, loadInitialState } from '@/store/initialState';
+import { buildDemoState, buildFreshState, loadInitialState } from '@/store/initialState';
 import { freezeDatesFor } from '@/domain/ledger';
 
 const TODAY = '2026-11-21';
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
-/** One "app run": load (or seed) and hand back what the store would start with. */
-const boot = (storage: KeyValueStorage) => loadInitialState(createAppStorage(storage), TODAY);
+/** One "app run": load (or seed) and hand back what the store would start with. `boot` is the sample-data session the older tests below are written against (the development/test switch on). */
+const boot = (storage: KeyValueStorage) => loadInitialState(createAppStorage(storage), TODAY, true);
+/** What a real first-time guest gets in production. */
+const bootReal = (storage: KeyValueStorage) => loadInitialState(createAppStorage(storage), TODAY, false);
 const toPersisted = (s: ReturnType<typeof boot>): PersistedData => ({ ...s.data, nextId: s.nextId });
 const schedules = (d: PersistedData) => d.habits.map((h) => scheduleOf(h, freezeDatesFor(d.ledger, h.id)));
 const raw = (storage: KeyValueStorage) => JSON.parse(storage.getItem(STORAGE_KEY)!);
 
-describe('first run', () => {
+describe('first run (a real first-time guest)', () => {
+  it('starts with no habits, no history and no frozen days, and saves that once', () => {
+    const storage = new MemoryStorage();
+    const s = bootReal(storage);
+    expect(s.source).toBe('fresh');
+    expect(s.data.habits).toEqual([]);
+    expect(s.data.notes).toEqual({});
+    expect(s.data.ledger.freezes).toEqual([]);
+    expect(s.data.ledger.rewards).toEqual({});
+    expect(s.nextId).toBe(1);
+    expect(raw(storage).data.habits).toEqual([]);
+  });
+  it('the wallet is the standard new-user wallet: 20 coins and the one welcome freeze, no earned rewards', () => {
+    const f = buildFreshState(TODAY, 20);
+    expect(f.ledger.wallet).toEqual({ coins: 20, freezesOwned: 1, pending: 0 });
+    expect(f.ledger.transactions.map((t) => t.id)).toEqual(['welcome_freeze']);
+  });
+  it('a returning guest gets their saved habits back, never a re-seed, even one named like a sample habit', () => {
+    const storage = new MemoryStorage();
+    const first = bootReal(storage);
+    const mine = { ...buildDemoState(TODAY).habits[0], id: 'local-1', dataOrigin: undefined };
+    delete (mine as { dataOrigin?: string }).dataOrigin;
+    createAppStorage(storage).save({ ...toPersisted(first), habits: [mine], nextId: 2 });
+    const again = bootReal(storage);
+    expect(again.source).toBe('saved');
+    expect(again.data.habits.map((h) => h.id)).toEqual(['local-1']);
+    expect(again.data.habits[0].completedDates).toEqual(mine.completedDates);
+    expect(again.nextId).toBe(2);
+  });
+  it('a guest who deleted every habit stays empty after a reload', () => {
+    const storage = new MemoryStorage();
+    const first = bootReal(storage);
+    createAppStorage(storage).save({ ...toPersisted(first), habits: [] });
+    expect(bootReal(storage).source).toBe('saved');
+    expect(bootReal(storage).data.habits).toEqual([]);
+  });
+  it('unreadable saved data starts empty (and keeps the backup), not with sample habits', () => {
+    const storage = new MemoryStorage();
+    storage.setItem(STORAGE_KEY, '{not json');
+    const s = bootReal(storage);
+    expect(s.source).toBe('recovered');
+    expect(s.data.habits).toEqual([]);
+  });
+});
+
+describe('first run (sample-data switch, development and tests only)', () => {
   it('seeds the mock data once and saves it', () => {
     const storage = new MemoryStorage();
     expect(storage.getItem(STORAGE_KEY)).toBeNull();
@@ -36,7 +83,7 @@ describe('first run', () => {
     expect(raw(storage).data.habits).toHaveLength(5);
   });
   it('the seeded wallet is 20 coins + the 15 the history earned, with the welcome freeze and one frozen day', () => {
-    const f = buildFreshState(TODAY);
+    const f = buildDemoState(TODAY);
     expect(f.ledger.wallet).toEqual({ coins: 35, freezesOwned: 1, pending: 0 });
     expect(f.ledger.freezes).toHaveLength(1);
     expect(f.nextId).toBe(1);
@@ -287,7 +334,7 @@ describe('corrupted or unexpected stored data', () => {
     const throwing: KeyValueStorage = { getItem: () => null, setItem: () => { throw new Error('quota'); }, removeItem: () => {} };
     const app = createAppStorage(throwing);
     expect(app.save(toPersisted(boot(new MemoryStorage())))).toBe(false);
-    expect(loadInitialState(app, TODAY).source).toBe('fresh'); // still starts, in memory
+    expect(loadInitialState(app, TODAY, false).source).toBe('fresh'); // still starts, in memory
   });
 });
 

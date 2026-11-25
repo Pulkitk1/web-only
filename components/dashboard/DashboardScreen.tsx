@@ -22,6 +22,7 @@ import { formatWeekdayMonthDay, type DateKey } from '@/utils/date';
 import { ArchiveHabitSheet } from './ArchiveHabitSheet';
 import { CreateHabitSheet } from './CreateHabitSheet';
 import { DayHeader } from './DayHeader';
+import { EmptyHabits } from './EmptyHabits';
 import { HabitCard } from './HabitCard';
 import { HabitList } from './HabitList';
 import { breakpointFor, DESKTOP_MAX_WIDTH, gridMetrics, MAX_COLUMN_DESKTOP, SIDE_PANEL_WIDTH, TABLET_MAX_WIDTH } from './layout';
@@ -136,7 +137,13 @@ export function DashboardScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: p.bg }}>
-      {desktop ? (
+      {home.length === 0 ? (
+        // No habits at all: just the header and the empty screen (no week selector, day grid, list or Today's Progress).
+        <View style={{ flex: 1, width: '100%', maxWidth: desktop ? DESKTOP_MAX_WIDTH : bp === 'tablet' ? TABLET_MAX_WIDTH : 560, alignSelf: 'center', paddingHorizontal: desktop ? 24 : 0 }}>
+          {topBar}
+          <EmptyHabits p={p} onCreate={() => setShowCreate(true)} />
+        </View>
+      ) : desktop ? (
         <View style={{ flex: 1, width: '100%', maxWidth: DESKTOP_MAX_WIDTH, alignSelf: 'center', paddingHorizontal: 24 }}>
           {topBar}
           <View style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: 12, paddingTop: 18, paddingBottom: 2 }}>
