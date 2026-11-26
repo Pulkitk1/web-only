@@ -4,22 +4,16 @@
  * transaction that reads first and writes only if the document is missing, so two tabs or devices can't both create it and an
  * existing profile (and its wallet) is never reset. `guestMigration.ts` restricts which paths can reach this.
  */
-import { doc, collection, getDocFromServer, getDocsFromServer, runTransaction, writeBatch } from 'firebase/firestore';
+import { doc, collection, getDocFromServer, getDocsFromServer, writeBatch } from 'firebase/firestore';
 
 import type { RawDoc } from '@/domain/cloudMapping';
-import { newProfileFields, type MigrationBackend } from './guestMigration';
+import type { MigrationBackend } from './guestMigration';
+import { ensureProfileIn } from './profileTransaction';
 import { resolve } from './firestoreWriter';
 import { db } from './firebase';
 
 export const firestoreMigration: MigrationBackend = {
-  ensureProfile: (uid, email) =>
-    runTransaction(db, async (t) => {
-      const ref = doc(db, `users/${uid}`);
-      const snap = await t.get(ref);
-      if (snap.exists()) return 'exists' as const;
-      t.set(ref, resolve(newProfileFields(email)));
-      return 'created' as const;
-    }),
+  ensureProfile: (uid, email) => ensureProfileIn(db, uid, email),
 
   async getDoc(path) {
     const snap = await getDocFromServer(doc(db, path));

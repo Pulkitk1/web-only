@@ -169,6 +169,7 @@ for (const [uid, email] of [['uid-delete', 'del@b.co'], ['uid-delete-b', 'del2@b
   });
 }
 const fakeReaderSource = `(() => {
+  if (!location.protocol.startsWith('http')) return; // about:blank pages (used to clear the site's storage) have no sessionStorage and need no fake database
   // The fake Firestore: documents by path, kept in sessionStorage so a page reload still sees earlier writes.
   const stored = sessionStorage.getItem('e2e_fs');
   const F = stored ? JSON.parse(stored) : ${JSON.stringify(FIXTURE)};
@@ -482,6 +483,8 @@ const click = async (sel, filter = '', nth = 0) => {
   return true;
 };
 const names = () => ev(`${q('[aria-label^="Open "]')}.map(e => e.getAttribute('aria-label').replace('Open ', ''))`);
+/** Circles per habit card: 5 on a phone or tablet, 7 on a desktop. Today's circle is the first of each card. */
+const perCard = async () => Math.round((await ev(`document.querySelectorAll('[role=checkbox]').length`)) / Math.max(1, (await names()).length));
 const coins = async () => Number((await ev(`document.querySelector('[aria-label^="Wallet"]').getAttribute('aria-label')`)).match(/(\d+) coins/)[1]);
 const path = () => ev('location.pathname');
 const theme = () => ev(`document.querySelector('[aria-label="Switch to light mode"]') ? 'dark' : 'light'`);
@@ -761,7 +764,7 @@ try {
   await load();
   const coins0 = await coins();
   const idx = (await names()).findIndex((n) => n === 'Meditate');
-  await click('[role=checkbox]', '', idx * 5); // Meditate, today: its 15th completed day
+  await click('[role=checkbox]', '', idx * (await perCard())); // Meditate, today: its 15th completed day
   check('completing the 15th day shows the milestone screen', await waitFor(() => has('Milestone unlocked'), 4000));
   check('it shows the reward and the message', (await has('+5 coins')) && (await has('Great consistency!')));
   check('the counter rows include 14, 15 and 16 DAYS', (await has('14  DAYS')) && (await has('15  DAYS')) && (await has('16  DAYS')));
@@ -778,15 +781,15 @@ try {
   section('Bonus Effort rest-day celebration (today is a Saturday)');
   await load();
   const sqlIdx = (await names()).findIndex((n) => n === 'SQL Practice');
-  const label = await ev(`document.querySelectorAll('[role=checkbox]')[${sqlIdx * 5}].getAttribute('aria-label')`);
+  const label = await ev(`document.querySelectorAll('[role=checkbox]')[${sqlIdx * (await perCard())}].getAttribute('aria-label')`);
   check("today's circle for SQL Practice is a planned rest day", label.includes('rest day'), label);
-  await click('[role=checkbox]', '', sqlIdx * 5);
+  await click('[role=checkbox]', '', sqlIdx * (await perCard()));
   check('completing a planned rest day shows "Bonus Effort!"', await waitFor(() => has('Bonus Effort!'), 3000));
   check('it shows the streak bonus and the habit', (await has('Streak +1 day')) && (await has('You showed up even on your rest day!')));
   await shot('rest-day');
   check('it closes itself after about 2.6 seconds', await waitFor(async () => !(await has('Bonus Effort!')), 4500));
-  await click('[role=checkbox]', '', sqlIdx * 5); // undo
-  await click('[role=checkbox]', '', sqlIdx * 5); // redo
+  await click('[role=checkbox]', '', sqlIdx * (await perCard())); // undo
+  await click('[role=checkbox]', '', sqlIdx * (await perCard())); // redo
   await sleep(600);
   check('un-checking and re-checking the same day does not celebrate again', !(await has('Bonus Effort!')));
   // A back-filled (non-today) day never celebrates: Sunday is not in the five-day window; use an ordinary past day.
@@ -1940,14 +1943,36 @@ check('it uses the chosen colour (Rose #FB7185)', restBg === 'rgb(251, 113, 133)
   await fill('Password', '123456');
   await click('[role=button]', '=Create account');
   await waitApp();
-  check('new account: registered and signed in, opening an empty app (no habits, nothing created)', (await inApp()) && (await names()).length === 0);
+  check('new account: registered and signed in, opening an empty app (no habits)', (await inApp()) && (await names()).length === 0);
   check('...the server received exactly one sign-up for the new email', authMock.log.filter((l) => l === 'signUp:new@b.co').length === 1);
+  // The new-account wallet: signing up only makes the login, so the app creates the profile and records the one free freeze.
+  const nuDoc = (k) => ev(`window.__consistoFake.doc(${JSON.stringify(k)})`);
+  const nuKeys = () => ev(`window.__consistoFake.keys()`);
+  const nuKey = async () => (await nuKeys()).filter((x) => /^users\/uid-new-\d+$/.test(x)).pop();
+  const nuLedger = async (k) => (await nuKeys()).filter((x) => x.startsWith(k + '/walletTransactions/') || x.startsWith(k + '/rewards/') || x.startsWith(k + '/freezes/')).sort();
+  check('the new account gets a profile and its welcome wallet without any extra step', await waitFor(async () => { const k = await nuKey(); return !!k && (await nuDoc(k))?.welcomeFreezePending === false; }, 10000));
+  const nwKey = await nuKey();
+  const nw = await nuDoc(nwKey);
+  check("the profile has Android's fields; 20 coins, 1 freeze, the welcome marker cleared", nw.email === 'new@b.co' && nw.displayName === 'new' && nw.coins === 20 && nw.freezesOwned === 1 && nw.welcomeFreezePending === false && nw.lastTransactionId === 'welcome_freeze' && nw.isDark === true, JSON.stringify(nw));
+  const nwTx = await nuDoc(nwKey + '/walletTransactions/welcome_freeze');
+  check('the ledger has exactly one entry, welcome_freeze (0 coins, +1 freeze, balance 20), and no reward or freeze record', JSON.stringify(await nuLedger(nwKey)) === JSON.stringify([nwKey + '/walletTransactions/welcome_freeze']) && nwTx && nwTx.coinDelta === 0 && nwTx.freezeDelta === 1 && nwTx.balanceAfter === 20, JSON.stringify(nwTx));
+  check('the dashboard shows 20 coins', (await coins()) === 20);
+  await openWallet();
+  check('the Wallet screen shows COINS 20 and STREAK FREEZES 1', (await walletHas('COINS: 20')) && (await walletHas('STREAK FREEZES: 1')));
+  await shot('new-account-wallet');
+  const nwBefore = JSON.stringify(await nuDoc(nwKey));
+  // A refresh, signing out and in again, and a second tab-like reload must not grant anything more.
+  await send('Page.navigate', { url: `${BASE}/habits` });
+  await waitApp();
+  await sleep(1500);
+  check('after a refresh the wallet is still 20 coins and 1 freeze, and nothing was granted again', (await coins()) === 20 && JSON.stringify(await nuDoc(nwKey)) === nwBefore && (await nuLedger(nwKey)).length === 1);
   await signOutUi();
   await fill('Email', 'new@b.co');
   await fill('Password', '123456');
   await click('[role=button]', '=Sign in');
   await waitApp();
-  check('...the new account can sign out and sign in again', await inApp());
+  await sleep(1500);
+  check('...the new account can sign out and sign in again, with the same wallet and still one profile and one welcome entry', (await inApp()) && (await coins()) === 20 && JSON.stringify(await nuDoc(nwKey)) === nwBefore && (await nuLedger(nwKey)).length === 1 && (await nuKeys()).filter((x) => /^users\/uid-new-\d+$/.test(x)).length === 1);
   await signOutUi();
 
   section('Authentication: offline error');
@@ -2267,7 +2292,7 @@ check('it uses the chosen colour (Rose #FB7185)', restBg === 'rgb(251, 113, 133)
   await click('[role=button]', '=Sign in');
   await waitApp();
   await sleep(400);
-  check("a different account on the same browser sees none of the previous account's habits and has a clean wallet", (await names()).length === 0 && (await coins()) === 0);
+  check("a different account on the same browser sees none of the previous account's habits or wallet (it has its own welcome wallet: 20 coins, not the other account's 42)", (await names()).length === 0 && (await coins()) === 20);
   await click('[role=button]', 'New habit');
   await click('[role=radio]', '', 2);
   await click('[role=button]', 'Next → Create Habit');
@@ -2277,8 +2302,12 @@ check('it uses the chosen colour (Rose #FB7185)', restBg === 'rgb(251, 113, 133)
   await waitFor(async () => (await wlog()).length > writesBefore + 0 && (await wlog()).at(-1).path.includes('uid-new'), 6000);
   const lastW = (await wlog()).at(-1);
   check("the second account's habit is written under its own uid only", /^users\/uid-new-\d+\/habits\/new-/.test(lastW.path), JSON.stringify(lastW));
-  const allWrites = await wlog();
-  check('every write of the habit stages was a habit document (or its completions/notes on delete) under the signed-in user: never a wallet, reward, freeze or transaction document, never another user', allWrites.flatMap((x) => (x.path ? [x.path] : x.paths ?? [])).every((p) => /^users\/uid-(existing|new-\d+)\/(habits\/[^/]+(\/completions\/[^/]+)?|dayNotes\/[^/]+)$/.test(p)) && allWrites.filter((x) => x.op !== 'deleteMany').every((x) => /\/habits\/[^/]+$/.test(x.path)));
+  // The new account's welcome wallet: its own profile creation and its one welcome-freeze transaction (nothing else may touch a wallet).
+  const ownWelcome = (x) => x.op === 'create-profile' ? /^users\/uid-new-\d+$/.test(x.path) : x.op === 'txn' && x.writes.length > 0 && x.writes.every((w) => /^users\/uid-new-\d+(\/walletTransactions\/welcome_freeze)?$/.test(w.path));
+  const nonHabit = (await wlog()).filter((x) => !(x.path && /\/habits\//.test(x.path)) && x.op !== 'deleteMany');
+  check("the only writes that were not habit writes are that account's own profile creation and its one welcome-freeze transaction", nonHabit.every(ownWelcome) && nonHabit.filter((x) => x.op === 'txn').length === 1 && nonHabit.filter((x) => x.op === 'create-profile').length === 1, JSON.stringify(nonHabit).slice(0, 400));
+  const habitWrites = (await wlog()).filter((x) => !ownWelcome(x));
+  check('every write of the habit stages was a habit document (or its completions/notes on delete) under the signed-in user: never a wallet, reward, freeze or transaction document, never another user', habitWrites.flatMap((x) => (x.path ? [x.path] : x.paths ?? [])).every((p) => /^users\/uid-(existing|new-\d+)\/(habits\/[^/]+(\/completions\/[^/]+)?|dayNotes\/[^/]+)$/.test(p)) && habitWrites.filter((x) => x.op !== 'deleteMany').every((x) => /\/habits\/[^/]+$/.test(x.path)));
   check("the first account's documents were not touched by the second account", JSON.stringify(Object.fromEntries(Object.entries(await fs()).filter(([k]) => k.startsWith('users/uid-existing')))) === existingSnapshot);
   await signOutUi();
   await click('[role=button]', '=Continue as Guest');
@@ -2674,11 +2703,12 @@ check('it uses the chosen colour (Rose #FB7185)', restBg === 'rgb(251, 113, 133)
 
   section('Signed-in account with no habits sees the empty screen');
   await signOutUi();
+  const zWatchedBefore = await fake('watched().length');
   await signInAs('z@b.co', 'secret1');
   await sleep(1500);
   const zt = await text();
   check('shows the empty screen and the header, with no sample habits and no dashboard body', zt.includes('Create your first habit') && zt.includes('Create Your First Habit') && (await names()).length === 0 && !/This Week|Today's Progress|Guest Bonus|Missed Day|SQL Practice|Morning Run|Read Books|Meditate|Drink Water/.test(zt) && (await coins()) === 20, zt.slice(0, 160));
-  const zWatched = await fake('watched()');
+  const zWatched = (await fake('watched()')).slice(zWatchedBefore);
   check('it reads only its own data, never another account or the guest', zWatched.length > 0 && zWatched.every((p) => p === 'users/uid-zero' || p.startsWith('users/uid-zero/')), JSON.stringify(zWatched));
   await click('[role=button]', 'Create your first habit');
   check('its button opens the creation flow', await waitFor(async () => (await ev(`document.querySelectorAll('[role=radio]').length`)) > 0, 3000));
@@ -2860,7 +2890,7 @@ check('it uses the chosen colour (Rose #FB7185)', restBg === 'rgb(251, 113, 133)
   await waitApp();
   check('the new account (no profile document yet) is offered the import', await waitFor(importSheet, 8000));
   const newUidKey = () => fake('keys()').then((k) => k.filter((x) => /^users\/uid-new-\d+$/.test(x)).pop());
-  check('looking at the offer created no profile', (await newUidKey()) === undefined);
+  check('the profile and the welcome wallet were already created when the account loaded (before any import)', !!(await newUidKey()));
   await click('[role=checkbox]', '=Import Evening Walk');
   await click('[role=button]', '^Import selected');
   check('the import finishes', await waitFor(() => has('Your habits are now in your account.'), 15000));

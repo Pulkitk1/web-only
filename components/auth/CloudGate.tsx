@@ -14,6 +14,7 @@ import { AppStoreProvider } from '@/store/AppStore';
 import { GuestImportProvider } from '@/components/migration/GuestImportFlow';
 import { activeLedgerRunner, activeMigration, activeReader, activeWriter, useCloudData } from '@/store/CloudData';
 import { useSession } from '@/store/SessionStore';
+import { useEnsureProfile } from '@/store/useEnsureProfile';
 import { useTheme } from '@/hooks/useTheme';
 import { Coral } from '@/theme';
 
@@ -22,12 +23,14 @@ function Centered({ children }: { children: ReactNode }) {
   return <View style={{ flex: 1, backgroundColor: t.bg, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 14 }}>{children}</View>;
 }
 
-function Loaded({ uid, email, data, fromCache, children }: { uid: string; email: string; data: CloudData; fromCache: boolean; children: ReactNode }) {
+function Loaded({ uid, email, data, fromCache, noProfile, children }: { uid: string; email: string; data: CloudData; fromCache: boolean; noProfile: boolean; children: ReactNode }) {
   // The source is fixed for the signed-in user (its first data seeds the store); later listener data arrives as the feed.
   const first = useRef(data).current;
   const cloud = useMemo(() => ({ uid, initial: first, writer: createHabitWriter(activeWriter(), activeReader(), uid), ledgerRunner: activeLedgerRunner() }), [uid, first]);
   const feed = useMemo(() => ({ data, fromCache }), [data, fromCache]);
   const migration = useMemo(() => activeMigration(), []);
+  // A new account has no profile (so no wallet) until this creates it; the welcome freeze is then recorded by the store.
+  useEnsureProfile({ uid, email, profileExists: data.profileExists || noProfile, fromCache, backend: migration });
   return (
     <AppStoreProvider cloud={cloud} feed={feed}>
       <GuestImportProvider uid={uid} email={email} backend={migration}>
@@ -65,7 +68,12 @@ function DeletingScreen() {
 
 export function CloudGate({ children }: { children: ReactNode }) {
   const { t } = useTheme();
-  const { uid, email, controller, deleting } = useSession();
+  const { uid, email, controller, deleting, notice } = useSession();
+  // After a deletion that removed the data but not the login, the account is empty on purpose: no new profile (and no welcome rewards) is created
+  // until the page is loaded again, so the screen does not contradict "your data was deleted".
+  const deletionFailed = useRef<string | null>(null);
+  if (!uid) deletionFailed.current = null;
+  else if (notice?.kind === 'error') deletionFailed.current = uid;
   // While deleting, no listener is kept on the account (an empty id means "watch nothing", as when signed out).
   const { state, reload } = useCloudData(deleting ? '' : uid ?? '');
 
@@ -103,7 +111,7 @@ export function CloudGate({ children }: { children: ReactNode }) {
       {/* after a failed deletion the app comes back on Home, so the reason is shown above whatever screen the user is on */}
       <AccountNotice />
       <View style={{ flex: 1 }}>
-        <Loaded key={uid} uid={uid} email={email ?? ''} data={state.data} fromCache={state.fromCache}>
+        <Loaded key={uid} uid={uid} email={email ?? ''} data={state.data} fromCache={state.fromCache} noProfile={deletionFailed.current === uid}>
           {children}
         </Loaded>
       </View>
